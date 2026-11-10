@@ -5,7 +5,11 @@
 #
 # 前提：arc-runners namespace 里已有 github-app-secret（GitHub App 凭据，lab 手工创建，不入库）。
 
-githubConfigUrl: https://github.com/Mangania
+# GitHub 没有“个人账号级”runner，只有 repository / organization / enterprise 三级。
+# 这里用仓库级：URL 必须是**跑 workflow 的那个仓库**。
+# 建好应用仓库后按实际名字改，例如 https://github.com/wxl594147480/demo-app
+# （想服务多个仓库就新建一个免费 organization，把 URL 换成 org 地址。）
+githubConfigUrl: https://github.com/wxl594147480/demo-app
 githubConfigSecret: github-app-secret
 runnerScaleSetName: arc-runner-lab
 

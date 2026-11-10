@@ -30,7 +30,7 @@ env:
   # 用仓库变量覆盖；不设置时默认指向 lab Nexus 的 docker-hosted。
   REGISTRY: ${{ vars.DEMO_REGISTRY || '192.168.1.117:5001' }}
   IMAGE_NAME: demo-app
-  GITOPS_REPOSITORY: Mangania/K8s-services
+  GITOPS_REPOSITORY: wxl594147480/my-argocd
   GITOPS_PATH: demo/gitops/overlays/dev
 
 jobs:

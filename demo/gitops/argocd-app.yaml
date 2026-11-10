@@ -8,10 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    # lab 里 ArgoCD 用 HTTPS + PAT 读仓库，比 SSH 少一层密钥/known_hosts 问题。
-    # 想改成 SSH，把它换成 git@github.com:Mangania/K8s-services.git，
-    # 并把仓库凭据 secret 换成 sshPrivateKey。
-    repoURL: https://github.com/Mangania/K8s-services.git
+    # 演示用的 GitOps 仓库（公开仓库，ArgoCD 可匿名 clone，不需要仓库凭据）。
+    # 换成私有仓库时：改用 SSH 或在 argocd namespace 里建 type=git 的 repository secret。
+    repoURL: https://github.com/wxl594147480/my-argocd.git
     targetRevision: main
     path: demo/gitops/overlays/dev
   destination:

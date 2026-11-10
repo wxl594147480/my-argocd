@@ -1,10 +1,9 @@
 # demo/：GitHub Actions → Nexus → ArgoCD 全链路验证
 
 > 这是 **lab 环境**（`192.168.1.110/111/117`）的验证用目录，不是生产组件。
-> 它没有接入 `infrastructure/app-of-apps.yaml`，生产 ArgoCD 不会同步 `demo/` 下的任何东西；
+> 清单里的 `repoURL` 指向演示仓库 `wxl594147480/my-argocd`（公开仓库），
+> 不涉及原来的 `Mangania/K8s-services`——那个仓库不要动。
 > 只有你手工把 `demo/gitops/argocd-app.yaml` apply 到 lab 集群，才会产生 `demo-dev` 这个应用。
->
-> 对应的 lab 手册：`docs/k8s-gitops-lab.md` 阶段 9–12。
 
 ## 0. 要验证的四段
 
@@ -19,7 +18,7 @@
 ③ Nexus docker-hosted：192.168.1.117:5001/demo-app:sha-<commit>
         │  kustomize edit set image + git commit/push（只改 Git）
         ▼
-④ GitOps 仓库 K8s-services: demo/gitops/overlays/dev
+④ GitOps 仓库 my-argocd: demo/gitops/overlays/dev
         │
         ▼
    lab ArgoCD 轮询到新 commit → 同步 demo-dev → kubelet 从 Nexus 拉镜像
@@ -32,10 +31,10 @@
 
 | 路径 | 属于哪个仓库 | 作用 |
 | --- | --- | --- |
-| `demo/app-repo/` | **应用仓库**（如 `Mangania/demo-app`） | 整个目录复制过去：Dockerfile、页面、workflow、测试依赖探测脚本 |
+| `demo/app-repo/` | **应用仓库**（如 `wxl594147480/demo-app`） | 整个目录复制过去：Dockerfile、页面、workflow、测试依赖探测脚本 |
 | `demo/app-repo/.env.example` | 应用仓库 | 本地/CI 的变量模板（`.env` 本身不入库） |
 | `demo/app-repo/.github/workflows/build-and-promote.yaml` | 应用仓库 | 测试、构建、推送、回写 Git |
-| `demo/gitops/` | **本仓库**（K8s-services） | Kustomize base/overlay + ArgoCD Application |
+| `demo/gitops/` | **本仓库**（my-argocd） | Kustomize base/overlay + ArgoCD Application |
 | `demo/gitops/runner/` | 本仓库 | lab 专用的 ARC controller + runner set（label `arc-runner-lab`） |
 | `demo/gitops/overlays/dev/kustomization.yaml` | 本仓库 | CI 只改这一处 `newTag` |
 | [demo/ENV.md](ENV.md) | 本仓库 | env 在本地 / CI / 集群三层怎么配 |
@@ -81,7 +80,7 @@
 
 ### 2.2 安装 ARC（走 ArgoCD，推荐）
 
-> 这一步依赖第 3 节（ArgoCD）和第 5 节（仓库凭据）。第一次搭环境时先做完那两节，再回来装 runner。
+> 这一步依赖第 3 节（ArgoCD）。仓库是公开的，不需要第 5 节的凭据（私有化时才配）。
 
 `demo/gitops/runner/` 里是 lab 专用的 controller + runner set，和生产的 `actions-runner/`
 互不影响。关键差别是 **label = `arc-runner-lab`**：如果 lab 也用 `arc-runner-set`，
@@ -243,19 +242,21 @@ runner 侧（dind）也要允许 HTTP 仓库，否则 `docker push` 会报
 > 如果你改用生产的 `cr.miguocomics.co`（HTTPS、已开匿名拉取），
 > 第 4 节整节可以跳过，并把 `DEMO_REGISTRY` 设为 `cr.miguocomics.co`。
 
-## 5. 给 ArgoCD 配 GitOps 仓库凭据
+## 5. 给 ArgoCD 配 GitOps 仓库凭据（公开仓库可跳过）
 
-ArgoCD 在 Pod 里跑，必须能 clone 这个私有仓库。用 HTTPS + PAT 最少踩坑：
+`wxl594147480/my-argocd` 是公开仓库，ArgoCD 可以匿名 clone，**这一节可以先跳过**。
+
+只有把仓库改成私有时才需要：
 
 ```bash
-kubectl -n argocd create secret generic k8s-services-repo \
+kubectl -n argocd create secret generic my-argocd-repo \
   --from-literal=type=git \
-  --from-literal=url=https://github.com/Mangania/K8s-services.git \
+  --from-literal=url=https://github.com/wxl594147480/my-argocd.git \
   --from-literal=username=<GitHub 用户名> \
   --from-literal=password=<PAT> \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl -n argocd label secret k8s-services-repo \
+kubectl -n argocd label secret my-argocd-repo \
   argocd.argoproj.io/secret-type=repository --overwrite
 ```
 
@@ -264,7 +265,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
 ## 6. 准备应用仓库
 
-1. 在 GitHub 建一个空仓库，例如 `Mangania/demo-app`。
+1. 在 GitHub 建一个空仓库，例如 `wxl594147480/demo-app`。
 2. 把 `demo/app-repo/` 里的**全部内容**（含 `.github/`、`.env.example`、`.gitignore`、`.dockerignore`）复制到仓库根目录，push。
    Windows 下用 `Copy-Item -Recurse -Force demo\app-repo\* <目标目录>\`，
    复制完确认 `.github/workflows/build-and-promote.yaml` 真的在（资源管理器默认隐藏点目录）。
@@ -282,12 +283,12 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 | --- | --- | --- |
 | `REGISTRY_USERNAME` | Secret | Nexus 的 CI 用户（如 `ci`） |
 | `REGISTRY_PASSWORD` | Secret | 上面对应密码 |
-| `GITOPS_TOKEN` | Secret | PAT，对 `K8s-services` 有 **Contents: Read and write** |
+| `GITOPS_TOKEN` | Secret | PAT，对 `my-argocd` 有 **Contents: Read and write** |
 | `DEMO_REGISTRY` | Variable | `192.168.1.117:5001`（可不配，workflow 有默认值） |
 | `RUNNER_LABEL` | Variable | `arc-runner-lab`（用生产 runner 时改成 `arc-runner-set`） |
 
 > `GITOPS_TOKEN` 用 classic PAT 时勾 `repo`；用 fine-grained 时选
-> `Mangania/K8s-services` + Contents 读写。若 main 开了分支保护，要把该用户/App 加进 bypass 名单，
+> `wxl594147480/my-argocd` + Contents 读写。若 main 开了分支保护，要把该用户/App 加进 bypass 名单，
 > 否则 promote 会 403。
 
 ## 7. workflow 怎么设计的
@@ -377,11 +378,11 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
 ### 8.1 顺序 A：先 CI 后 CD（推荐，排错面最小）
 
-1. 装 ArgoCD、配仓库凭据（第 3、5 节）。
+1. 装 ArgoCD（第 3 节）；仓库是公开的，第 5 节可跳过。
 2. 装 ARC（2.2），确认 GitHub Runners 页面里 `arc-runner-lab` 是 Idle。
 3. push 应用仓库 → Actions 里 `meta → test → build → promote` 依次变绿。
 4. 确认镜像：Nexus → Browse → `docker-hosted` → `demo-app`，应出现 `sha-xxxxxxx`。
-5. 确认回写：`git -C K8s-services log --oneline -3`，应有一条
+5. 确认回写：在 `my-argocd` 的本地克隆里 `git log --oneline -3`，应有一条
    `chore(demo): 镜像升级到 sha-xxxxxxx`。
 6. `kubectl apply -f demo/gitops/argocd-app.yaml`。
 7. 看 `demo-dev` 从 `Progressing` 变 `Synced / Healthy`。
@@ -455,7 +456,7 @@ kubectl -n demo-dev scale deploy/demo-app --replicas=3
 | 项 | 生产 | 本 demo |
 | --- | --- | --- |
 | 镜像仓库 | `cr.miguocomics.co`（HTTPS，匿名拉取） | lab Nexus `192.168.1.117:5001`（HTTP） |
-| GitOps 仓库 | `Mangania/argocd-web-services` | 本仓库 `demo/` 目录 |
+| GitOps 仓库 | `Mangania/argocd-web-services` | `wxl594147480/my-argocd` 的 `demo/` 目录 |
 | tag 回写 | UAT 由 Image Updater 自动，生产人工 | CI 直接改 `newTag` |
 | ArgoCD 暴露 | Ingress + `gts-prod` 证书 | 无 TLS，`argocd.lab` 或 port-forward |
 | 环境隔离 | `account-center` / `account-center-uat` | 只有 `demo-dev` |

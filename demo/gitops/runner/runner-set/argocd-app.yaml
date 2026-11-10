@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Mangania/K8s-services.git
+    repoURL: https://github.com/wxl594147480/my-argocd.git
     targetRevision: main
     path: demo/gitops/runner/runner-set
   destination:
