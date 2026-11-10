@@ -478,3 +478,101 @@ kubectl -n demo-dev scale deploy/demo-app --replicas=3
 
 **结论**：链路结构一致，差异只在“谁有权限改 Git”和“入口怎么暴露”。
 把这两点想清楚，生产的发版流程就能直接套用。
+
+## 13. ArgoCD 装好之后的实操顺序（本次总结）
+
+> 机器标记：🖥 = Windows（`E:\Project` 下改文件、push）；🟦 = 110（`lab-k8s-1`，所有 `kubectl`）；🟨 = 117/111（节点诊断）。
+> 前提：ArgoCD 已安装，浏览器能打开 `http://argocd.lab` 并用 admin 登录。
+
+### 13.1 为什么装完 ArgoCD 还不能结束
+
+ArgoCD 只是“执行器”：它读 Git 里的清单，把清单变成集群资源。
+装完之后还缺三样东西，缺一个链路就断：
+
+```
+ArgoCD 能读 GitOps 仓库
+        ↓
+有 runner 能执行 GitHub 上的 workflow
+        ↓
+应用仓库有代码 + workflow，能构建并推送镜像
+        ↓
+ArgoCD 把新 tag 部署成 Pod，kubelet 能拉到这个镜像
+```
+
+### 13.2 步骤清单
+
+| # | 在哪 | 做什么 | 主要作用 | 验收 |
+| --- | --- | --- | --- | --- |
+| 1 | 🖥 | 确认 `demo/gitops/**/argocd-app.yaml` 的 `repoURL` 指向你的仓库（`wxl594147480/my-argocd`） | ArgoCD 从正确的地方读清单；指向旧仓库会 `repository not found` / path not found | 浏览器打开 raw 文件能看到新地址 |
+| 2 | 🟦 | `kubectl -n argocd get pods`；浏览器登录 `argocd.lab` | 确认 ArgoCD 本身可用，后面所有 Application 都靠它 | 5 个 Pod 全 Running，能登录 |
+| 3 | 🟦 | （可选）建仓库凭据 Secret | 只在仓库私有时需要；公开仓库可跳过 | Settings → Repositories 显示成功 |
+| 4 | 浏览器 | 新建空仓库 `wxl594147480/demo-app` | 仓库级 runner 必须有“一个仓库”作为注册目标 | 仓库创建成功 |
+| 5 | 浏览器 | 建 GitHub App：Actions `Read`、Administration `Read and write`、Metadata `Read`；Install 到 `demo-app`；记下 App ID / Installation ID / `.pem` | ARC 用 App 身份向 GitHub 注册 runner；个人账号没有“用户级 runner”，只能仓库级 | App 已安装到 demo-app |
+| 6 | 🟦 | 在 `arc-runners` 建 Secret `github-app-secret` | 把 App 凭据交给 controller | `kubectl -n arc-runners get secret github-app-secret` 有输出 |
+| 7 | 🟦 | apply `demo/gitops/runner/controller` 的 Application | 部署 ARC controller，它负责按需创建/销毁 runner Pod | Application `Synced/Healthy`，controller Pod Running |
+| 8 | 🟦 | apply `demo/gitops/runner/runner-set` 的 Application | 创建 `AutoscalingRunnerSet` 和 runner Pod（含 dind sidecar） | runner Pod Running |
+| 9 | 🟦/浏览器 | `kubectl -n arc-runners get autoscalingrunnersets`；GitHub → demo-app → Settings → Actions → Runners | 确认 runner 已注册到 GitHub | 出现 `arc-runner-lab`，状态 **Idle** |
+| 10 | 🖥 | 把 `demo/app-repo/` 全部内容（含 `.github`）复制到 demo-app；配 Secrets/Variables | 让应用仓库有 Dockerfile、workflow、测试脚本，并能读到凭据 | 仓库根目录有 `.github/workflows/build-and-promote.yaml`；只有 `GITOPS_TOKEN` 一个 Secret |
+| 11 | 🖥 | `git push` demo-app | 触发 workflow | Actions 出现 run（runner 没上线时是 Queued） |
+| 12 | 自动 | runner 从 GitHub 领取 job | 执行 `meta → test → build → push → promote` | job 变绿；ghcr 出现 `sha-xxxxxxx`；my-argocd 出现 bot 提交 |
+| 13 | 浏览器 | ghcr package 改 Public | 让 kubelet 能匿名拉应用镜像，否则 `ImagePullBackOff: unauthorized` | Packages → demo-app → Public |
+| 14 | 🟦 | apply `demo/gitops/argocd-app.yaml` | 把 overlay 渲染成 `demo-dev` 的 Deployment/Service/Ingress | Application `Synced/Healthy` |
+| 15 | 🟦 | 对比镜像 tag 与 `/version.txt` | 端到端验收：Git、镜像、Pod 三者一致 | 两个 `sha-*` 相同 |
+
+### 13.3 每一步在防什么问题
+
+| 步骤 | 如果跳过会怎样 |
+| --- | --- |
+| 1 改 repoURL | ArgoCD 一直报 `repository not found` 或找不到 `demo/` 路径 |
+| 5 建 GitHub App | runner set 报 `failed to create runner scale set`，GitHub 里看不到 runner |
+| 6 建 Secret | runner Pod `CreateContainerConfigError`，controller 日志报找不到 secret |
+| 7 先装 controller | runner set 找不到 `arc-gha-rs-controller` 这个 ServiceAccount |
+| 9 确认 Idle | workflow 一直 Queued，看起来像“卡住”，其实没有 runner 接活 |
+| 10 复制 `.github` | Actions 里没有 workflow，push 后什么也不发生 |
+| 13 改 Public | 镜像推上去了，但集群拉不下来，Pod 一直 `ImagePullBackOff` |
+| 14 apply Application | 镜像和 Git 都对了，但集群里没有 Deployment |
+
+### 13.4 本次实际踩过的坑
+
+| 现象 | 根因 | 处理 |
+| --- | --- | --- |
+| `kubectl apply -f https://raw.githubusercontent.com/...` 一直没反应 | 该域名只解析出 IPv6，kubectl 的 HTTP 客户端卡住 | 先 `curl -o /tmp/x.yaml` 再 `kubectl apply -f /tmp/x.yaml` |
+| `ImagePullBackOff` + `no such host` | lab 解析不了 `cr.miguocomics.co` / `mirrors.miguocomics.co` | 换公网源：`ghcr.m.daocloud.io`、`docker.m.daocloud.io` |
+| 拉镜像 10 分钟还在 `ContainerCreating` | 出口约 0.5MB/s，镜像几百 MB | 换 daocloud 镜像站；或从公网机器 `docker save` + `ctr images import` |
+| `git add -A` 把 `my-argocd` 当嵌套仓库 | `E:\Project\argocd` 被误 `git init`，git 根目录不对 | `git rev-parse --show-toplevel` 确认；删掉上层 `.git` 后在 demo-app 里重新 init |
+| runner 一直不接活 | label 与生产 `arc-runner-set` 冲突，或 App 没装到仓库 | 用 `arc-runner-lab`；确认 App 安装范围 |
+| workflow 报 `docker login` 失败 | Variables 里还留着旧的 `DEMO_REGISTRY`，走了私有仓库分支 | 删掉 `DEMO_REGISTRY` / `DEMO_IMAGE_NAME` |
+| Pod `ImagePullBackOff` + `unauthorized` | ghcr package 默认 private | Packages → Package settings → Change visibility → Public |
+| controller 拉 `ghcr.io/...` 卡住 | 直连海外慢 | controller 的 `valuesInline` 把 image 换到 `ghcr.m.daocloud.io` |
+
+### 13.5 最小命令版（照着抄）
+
+```bash
+# 🟦 110
+kubectl -n argocd get pods
+
+curl -fsSL -m 30 -o /tmp/controller-app.yaml \
+  https://raw.githubusercontent.com/wxl594147480/my-argocd/main/demo/gitops/runner/controller/argocd-app.yaml
+kubectl apply -f /tmp/controller-app.yaml
+
+curl -fsSL -m 30 -o /tmp/runner-set-app.yaml \
+  https://raw.githubusercontent.com/wxl594147480/my-argocd/main/demo/gitops/runner/runner-set/argocd-app.yaml
+kubectl apply -f /tmp/runner-set-app.yaml
+
+kubectl -n arc-runners get pods
+kubectl -n arc-runners get autoscalingrunnersets
+
+# 🟦 110：所有前置都绿了之后
+curl -fsSL -m 30 -o /tmp/demo-app.yaml \
+  https://raw.githubusercontent.com/wxl594147480/my-argocd/main/demo/gitops/argocd-app.yaml
+kubectl apply -f /tmp/demo-app.yaml
+kubectl -n demo-dev get pods
+```
+
+```powershell
+# 🖥 Windows：应用仓库首次推送
+cd E:\Project\argocd\demo-app
+git add -A
+git commit -m "feat: 初始化 demo-app"
+git push
+```
