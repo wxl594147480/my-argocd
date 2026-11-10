@@ -72,8 +72,8 @@
      --from-file=github_app_private_key=app.pem
    ```
 
-2. `values.yaml` 里 runner 镜像指向 `cr.miguocomics.co/actions-runner:2.338.0`。
-   lab 如果拉不到，需要先把它 retag 推到集群能访问的仓库，再改 `values.yaml` 的 image。
+2. `values.yaml` 里的镜像已经换成公网源（`ghcr.io/actions/actions-runner`、`docker.m.daocloud.io/library/docker`），
+   因为 lab 解析不到生产域名 `cr.miguocomics.co` / `mirrors.miguocomics.co`。拉不到时换一个可访问的镜像源即可。
 
 确认 runner 真的能接活：在应用仓库里跑一次只含 `echo` 的 workflow，
 `runs-on: arc-runner-lab` 能变绿再继续。
@@ -138,8 +138,8 @@ helm install arc-runner-lab \
 ```
 
 前提是 lab 能拉到 `values.yaml` 里的两个镜像
-（`cr.miguocomics.co/actions-runner:2.338.0`、`mirrors.miguocomics.co/docker/library/docker:29.9.1-dind`）。
-拉不到就先在生产侧 retag 推到集群能访问的仓库，再改 `values.yaml` 的 image 字段。
+（`ghcr.io/actions/actions-runner:2.338.0`、`docker.m.daocloud.io/library/docker:29.9.1-dind`）。
+拉不到就换一个集群能访问的镜像源，再改 `values.yaml` 的 image 字段。
 
 ## 3. 在 lab 安装 ArgoCD
 

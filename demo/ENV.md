@@ -137,7 +137,7 @@ spec:
     spec:
       containers:
         - name: demo-app
-          image: 192.168.1.117:5001/demo-app:sha-xxxxxxx
+          image: ghcr.io/wxl594147480/demo-app:sha-xxxxxxx
           # 整组注入：ConfigMap/Secret 里每个 key 变成一个环境变量
           envFrom:
             - configMapRef:

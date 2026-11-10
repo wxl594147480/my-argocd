@@ -1,7 +1,7 @@
 # lab 专用 runner scale set。与生产 actions-runner/runner-set/values.yaml 的差异：
 #   1. runnerScaleSetName = arc-runner-lab：label 不同，避免和生产 arc-runner-set 抢同一批作业
 #   2. minRunners = 1：lab 资源有限
-#   3. dind 增加 --insecure-registry：lab Nexus 的 docker connector 是 HTTP
+#   3. 镜像换成公网源：lab 解析不到 cr.miguocomics.co / mirrors.miguocomics.co
 #
 # 前提：arc-runners namespace 里已有 github-app-secret（GitHub App 凭据，lab 手工创建，不入库）。
 
@@ -31,9 +31,8 @@ template:
             value: unix:///var/run/docker.sock
           - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
             value: "120"
-        # lab 拉不到 cr.miguocomics.co 时，换成 lab Nexus 里 retag 的地址，
-        # 例如 192.168.1.117:5001/actions-runner:2.338.0。
-        image: cr.miguocomics.co/actions-runner:2.338.0
+        # lab 用公网镜像；ghcr.io 直连约 0.5MB/s，走 daocloud 镜像站更快
+        image: ghcr.m.daocloud.io/actions/actions-runner:2.338.0
         volumeMounts:
           - mountPath: /home/runner/_work
             name: work
@@ -46,7 +45,7 @@ template:
           - -r
           - /home/runner/externals/.
           - /home/runner/tmpDir/
-        image: cr.miguocomics.co/actions-runner:2.338.0
+        image: ghcr.m.daocloud.io/actions/actions-runner:2.338.0
         volumeMounts:
           - mountPath: /home/runner/tmpDir
             name: dind-externals
@@ -64,7 +63,8 @@ template:
         env:
           - name: DOCKER_GROUP_GID
             value: "123"
-        image: mirrors.miguocomics.co/docker/library/docker:29.9.1-dind
+        # Docker Hub 在 lab 经常不通，用 daocloud 镜像站；拉不到再换 docker.io/library/docker
+        image: docker.m.daocloud.io/library/docker:29.9.1-dind
         restartPolicy: Always
         securityContext:
           privileged: true

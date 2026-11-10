@@ -23,13 +23,16 @@ concurrency:
 
 # 只读当前仓库；写 GitOps 仓库用的是单独的 PAT（GITOPS_TOKEN），
 # 因为 GITHUB_TOKEN 的作用域仅限当前仓库。
+# packages: write 是推 ghcr.io 需要的。
 permissions:
   contents: read
+  packages: write
 
 env:
-  # 用仓库变量覆盖；不设置时默认指向 lab Nexus 的 docker-hosted。
-  REGISTRY: ${{ vars.DEMO_REGISTRY || '192.168.1.117:5001' }}
-  IMAGE_NAME: demo-app
+  # 默认用 GitHub 自带的 ghcr.io，不需要 Nexus。
+  # 换回私有仓库时设置两个仓库变量即可：DEMO_REGISTRY + DEMO_IMAGE_NAME。
+  REGISTRY: ${{ vars.DEMO_REGISTRY || 'ghcr.io' }}
+  IMAGE_NAME: ${{ vars.DEMO_IMAGE_NAME || format('{0}/demo-app', github.repository_owner) }}
   GITOPS_REPOSITORY: wxl594147480/my-argocd
   GITOPS_PATH: demo/gitops/overlays/dev
 
@@ -132,7 +135,16 @@ jobs:
         # 把 tag 写进镜像，部署后可以反查镜像内容是否与 tag 一致。
         run: echo "${{ needs.meta.outputs.version }}" > version.txt
 
-      - name: Log in to registry
+      - name: Log in to ghcr.io
+        if: env.REGISTRY == 'ghcr.io'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to private registry
+        if: env.REGISTRY != 'ghcr.io'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -211,16 +223,18 @@ jobs:
         working-directory: ${{ env.GITOPS_PATH }}
         env:
           IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # overlay 里 images[0].name 的值（短名），不是完整仓库地址
+          IMAGE_KEY: demo-app
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
           if command -v kustomize >/dev/null 2>&1; then
             # 首选：kustomize 自己改，newName/newTag 一起处理
-            kustomize edit set image "${IMAGE_REF}=${IMAGE_REF}:${VERSION}"
+            kustomize edit set image "${IMAGE_KEY}=${IMAGE_REF}:${VERSION}"
           else
             # 兜底：runner 镜像里没有 kustomize，只替换 newTag。
-            # 前提是 overlay 里的 newName 已经与 DEMO_REGISTRY 一致。
-            grep -q "name: ${IMAGE_REF}" kustomization.yaml
+            # 前提是 overlay 里的 newName 已经与 IMAGE_REF 一致。
+            grep -q "name: ${IMAGE_KEY}" kustomization.yaml
             sed -i -E "s|^([[:space:]]*newTag:).*|\1 ${VERSION}|" kustomization.yaml
           fi
           echo "--- 变更后的 images 段 ---"
