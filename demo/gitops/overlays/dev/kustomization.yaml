@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: demo-dev
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+# CI 的 promote job 只改这一段：newTag 换成 sha-<commit>。
+# newName 里的 registry 必须与仓库变量 DEMO_REGISTRY 一致，
+# 因为 runner 上没有 kustomize 时会走 sed 兜底，只替换 newTag。
+images:
+  - name: demo-app
+    newName: 192.168.1.117:5001/demo-app
+    newTag: sha-0000000
+
+replicas:
+  - name: demo-app
+    count: 1

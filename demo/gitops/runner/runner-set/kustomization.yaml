@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: arc-runners
+
+# 与生产 actions-runner/runner-set 结构相同，但取值来自 lab 专用的 values.yaml：
+# label 是 arc-runner-lab，minRunners=1，dind 放行 lab Nexus 的 HTTP 仓库。
+helmCharts:
+  - name: gha-runner-scale-set
+    repo: oci://ghcr.io/actions/actions-runner-controller-charts
+    version: 0.13.1
+    releaseName: arc-runner-lab
+    namespace: arc-runners
+    includeCRDs: true
+    valuesFile: values.yaml

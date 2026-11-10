@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # lab 里 ArgoCD 用 HTTPS + PAT 读仓库，比 SSH 少一层密钥/known_hosts 问题。
+    # 想改成 SSH，把它换成 git@github.com:Mangania/K8s-services.git，
+    # 并把仓库凭据 secret 换成 sshPrivateKey。
+    repoURL: https://github.com/Mangania/K8s-services.git
+    targetRevision: main
+    path: demo/gitops/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

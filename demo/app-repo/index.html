@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>demo-app</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 4rem auto; max-width: 40rem; }
+      code { background: #f2f2f2; padding: .15rem .4rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>demo-app</h1>
+    <p>GitHub Actions → Nexus → ArgoCD 全链路验证。</p>
+    <p>当前版本：<code id="version">loading…</code></p>
+    <script>
+      fetch("version.txt", { cache: "no-store" })
+        .then((r) => r.text())
+        .then((t) => { document.getElementById("version").textContent = t.trim(); })
+        .catch(() => { document.getElementById("version").textContent = "unknown"; });
+    </script>
+  </body>
+</html>

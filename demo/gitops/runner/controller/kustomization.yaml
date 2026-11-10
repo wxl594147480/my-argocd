@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: arc-systems
+
+# 与生产 actions-runner/controller 相同：只装 controller，不装 runner set。
+# release 名必须是 arc，runner set 才能通过 arc-gha-rs-controller 这个 SA 关联上。
+helmCharts:
+  - name: gha-runner-scale-set-controller
+    repo: oci://ghcr.io/actions/actions-runner-controller-charts
+    version: 0.13.1
+    releaseName: arc
+    namespace: arc-systems
+    includeCRDs: true

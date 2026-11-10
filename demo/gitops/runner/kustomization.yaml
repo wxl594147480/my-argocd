@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 一次 apply 两个 Application；只想先装 controller 时单独 apply 子目录里的 argocd-app.yaml。
+resources:
+  - controller/argocd-app.yaml
+  - runner-set/argocd-app.yaml

@@ -1,0 +1,8 @@
+# 环境变量文件绝不入库
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+coverage/

@@ -1,0 +1,87 @@
+# lab 专用 runner scale set。与生产 actions-runner/runner-set/values.yaml 的差异：
+#   1. runnerScaleSetName = arc-runner-lab：label 不同，避免和生产 arc-runner-set 抢同一批作业
+#   2. minRunners = 1：lab 资源有限
+#   3. dind 增加 --insecure-registry：lab Nexus 的 docker connector 是 HTTP
+#
+# 前提：arc-runners namespace 里已有 github-app-secret（GitHub App 凭据，lab 手工创建，不入库）。
+
+githubConfigUrl: https://github.com/Mangania
+githubConfigSecret: github-app-secret
+runnerScaleSetName: arc-runner-lab
+
+minRunners: 1
+maxRunners: 3
+
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
+template:
+  spec:
+    containers:
+      - name: runner
+        command:
+          - /home/runner/run.sh
+        env:
+          - name: DOCKER_HOST
+            value: unix:///var/run/docker.sock
+          - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+            value: "120"
+        # lab 拉不到 cr.miguocomics.co 时，换成 lab Nexus 里 retag 的地址，
+        # 例如 192.168.1.117:5001/actions-runner:2.338.0。
+        image: cr.miguocomics.co/actions-runner:2.338.0
+        volumeMounts:
+          - mountPath: /home/runner/_work
+            name: work
+          - mountPath: /var/run
+            name: dind-sock
+    initContainers:
+      - name: init-dind-externals
+        command:
+          - cp
+          - -r
+          - /home/runner/externals/.
+          - /home/runner/tmpDir/
+        image: cr.miguocomics.co/actions-runner:2.338.0
+        volumeMounts:
+          - mountPath: /home/runner/tmpDir
+            name: dind-externals
+      - name: dind
+        args:
+          - dockerd
+          - --host=unix:///var/run/docker.sock
+          - --group=$(DOCKER_GROUP_GID)
+          - --mtu=1400
+          # lab Nexus 是 HTTP；换成 https 仓库时删掉这一行
+          - --insecure-registry=192.168.1.117:5001
+          # lab 拉 Docker Hub 不稳时再加镜像站：
+          # - --registry-mirror=https://docker.m.daocloud.io
+        env:
+          - name: DOCKER_GROUP_GID
+            value: "123"
+        image: mirrors.miguocomics.co/docker/library/docker:29.9.1-dind
+        restartPolicy: Always
+        securityContext:
+          privileged: true
+        startupProbe:
+          exec:
+            command:
+              - docker
+              - info
+          failureThreshold: 24
+          initialDelaySeconds: 0
+          periodSeconds: 5
+        volumeMounts:
+          - mountPath: /home/runner/_work
+            name: work
+          - mountPath: /var/run
+            name: dind-sock
+          - mountPath: /home/runner/externals
+            name: dind-externals
+    volumes:
+      - emptyDir: {}
+        name: work
+      - emptyDir: {}
+        name: dind-sock
+      - emptyDir: {}
+        name: dind-externals

@@ -1,0 +1,240 @@
+name: demo-app
+
+# 这个文件属于「应用仓库」，复制到应用仓库根目录的 .github/workflows/ 下使用。
+# 设计说明见 GitOps 仓库 demo/README.md。
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: "是否把新镜像 tag 写回 GitOps 仓库"
+        type: boolean
+        default: true
+
+# 同一个 ref 只跑一个实例；main 上不取消，避免两个构建互相打断导致 Git 回写乱序。
+concurrency:
+  group: demo-app-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# 只读当前仓库；写 GitOps 仓库用的是单独的 PAT（GITOPS_TOKEN），
+# 因为 GITHUB_TOKEN 的作用域仅限当前仓库。
+permissions:
+  contents: read
+
+env:
+  # 用仓库变量覆盖；不设置时默认指向 lab Nexus 的 docker-hosted。
+  REGISTRY: ${{ vars.DEMO_REGISTRY || '192.168.1.117:5001' }}
+  IMAGE_NAME: demo-app
+  GITOPS_REPOSITORY: Mangania/K8s-services
+  GITOPS_PATH: demo/gitops/overlays/dev
+
+jobs:
+  # 1) 统一算出这次要用的镜像 tag，后续 job 只引用输出，不再各自计算。
+  meta:
+    name: Resolve image tags
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-lab' }}
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # 每次提交一个不可变标签：sha-<7 位>；打 v* tag 时再额外推一个语义化版本。
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=tag
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+  # 2) 测试：在 runner 内部用 service containers 起 PostgreSQL / Valkey / RabbitMQ，
+  #    跑完随 job 一起销毁。地址统一注入成 127.0.0.1，测试代码不需要感知 CI。
+  test:
+    name: Test
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-lab' }}
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U demo -d demo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      rabbitmq:
+        image: rabbitmq:4-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: demo
+          RABBITMQ_DEFAULT_PASS: demo
+        ports:
+          - 5672:5672
+          - 15672:15672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://demo:demo@127.0.0.1:5432/demo
+      VALKEY_URL: redis://127.0.0.1:6379/0
+      AMQP_URL: amqp://demo:demo@127.0.0.1:5672/
+      RABBITMQ_MANAGEMENT_URL: http://127.0.0.1:15672
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Wait for dependencies
+        # 健康检查已经保证容器可用，这里再做一次 TCP 探测，顺带把三个地址打进日志。
+        run: bash scripts/test-deps.sh
+
+      - name: Run tests
+        # ↓↓↓ 换成真实测试命令，例如 dotnet test / npm test / pytest / go test ./...
+        run: |
+          echo "DATABASE_URL=${DATABASE_URL}"
+          echo "VALKEY_URL=${VALKEY_URL}"
+          echo "AMQP_URL=${AMQP_URL}"
+          echo "TODO: 在这里执行测试套件"
+
+  # 3) 构建、自检、推送。PR 只构建不推送。
+  build:
+    name: Build and push
+    needs: [meta, test]
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-lab' }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Stamp build version
+        # 把 tag 写进镜像，部署后可以反查镜像内容是否与 tag 一致。
+        run: echo "${{ needs.meta.outputs.version }}" > version.txt
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # 这里刻意用普通 docker build/push，而不是 buildx + registry cache：
+      # lab 的 dind 拉不到 moby/buildkit 镜像时，setup-buildx 会直接卡住。
+      # 链路跑通后再换成 buildx 和 type=registry 缓存（见 demo/README.md 7.2）。
+      - name: Build image
+        env:
+          TAGS: ${{ needs.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            args+=(-t "${tag}")
+          done <<< "${TAGS}"
+          docker build "${args[@]}" .
+
+      - name: Smoke test
+        # 只对真正推上去的镜像做：起容器、读 /version.txt、与本次 tag 比对。
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f demo-smoke >/dev/null 2>&1 || true' EXIT
+          docker run -d --name demo-smoke -p 18080:80 "${IMAGE}"
+          for _ in $(seq 1 30); do
+            if body="$(curl -fsS http://127.0.0.1:18080/version.txt 2>/dev/null)"; then
+              echo "served: ${body}"
+              if [ "${body}" = "sha-${GITHUB_SHA::7}" ]; then
+                echo "smoke test passed"
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          echo "smoke test failed: version.txt 与 tag 不一致或容器未就绪" >&2
+          docker logs demo-smoke || true
+          exit 1
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ needs.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            echo "pushing ${tag}"
+            docker push "${tag}"
+          done <<< "${TAGS}"
+
+  # 4) 只改 Git，不碰集群。ArgoCD 负责把 Git 里的 tag 变成集群里的 Pod。
+  promote:
+    name: Promote to GitOps
+    needs: [meta, build]
+    if: >-
+      (github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' && inputs.promote)
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-lab' }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out GitOps repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.GITOPS_REPOSITORY }}
+          ref: main
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Update image tag in overlay
+        working-directory: ${{ env.GITOPS_PATH }}
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if command -v kustomize >/dev/null 2>&1; then
+            # 首选：kustomize 自己改，newName/newTag 一起处理
+            kustomize edit set image "${IMAGE_REF}=${IMAGE_REF}:${VERSION}"
+          else
+            # 兜底：runner 镜像里没有 kustomize，只替换 newTag。
+            # 前提是 overlay 里的 newName 已经与 DEMO_REGISTRY 一致。
+            grep -q "name: ${IMAGE_REF}" kustomization.yaml
+            sed -i -E "s|^([[:space:]]*newTag:).*|\1 ${VERSION}|" kustomization.yaml
+          fi
+          echo "--- 变更后的 images 段 ---"
+          grep -A3 '^images:' kustomization.yaml
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${GITOPS_PATH}/kustomization.yaml"
+          if git diff --cached --quiet; then
+            echo "GitOps 已经是 ${{ needs.meta.outputs.version }}，无需提交"
+            exit 0
+          fi
+          git commit -m "chore(demo): 镜像升级到 ${{ needs.meta.outputs.version }}"
+          git push origin HEAD:main

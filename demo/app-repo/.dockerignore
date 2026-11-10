@@ -1,0 +1,8 @@
+# 防止 .env 被打进镜像层。COPY . . 的应用尤其要检查这一条。
+.env
+.env.*
+.git
+.github
+node_modules
+dist
+coverage
