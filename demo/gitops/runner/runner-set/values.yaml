@@ -56,8 +56,9 @@ template:
           - --host=unix:///var/run/docker.sock
           - --group=$(DOCKER_GROUP_GID)
           - --mtu=1400
-          # lab Nexus 是 HTTP；换成 https 仓库时删掉这一行
-          - --insecure-registry=192.168.1.117:5001
+          # 默认推 ghcr.io（HTTPS），不需要 insecure-registry。
+          # 如果改用 HTTP 的私有仓库（例如 lab Nexus 192.168.1.117:5001），再加回来：
+          # - --insecure-registry=192.168.1.117:5001
           # lab 拉 Docker Hub 不稳时再加镜像站：
           # - --registry-mirror=https://docker.m.daocloud.io
         env:

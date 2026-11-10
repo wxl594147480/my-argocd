@@ -1,4 +1,4 @@
-# demo/：GitHub Actions → Nexus → ArgoCD 全链路验证
+# demo/：GitHub Actions → ghcr.io → ArgoCD 全链路验证
 
 > 这是 **lab 环境**（`192.168.1.110/111/117`）的验证用目录，不是生产组件。
 > 清单里的 `repoURL` 指向演示仓库 `wxl594147480/my-argocd`（公开仓库），
@@ -15,13 +15,13 @@
         │  service containers：postgres / valkey / rabbitmq → 跑测试
         │  docker build → smoke test → docker push
         ▼
-③ Nexus docker-hosted：192.168.1.117:5001/demo-app:sha-<commit>
+③ ghcr.io：ghcr.io/wxl594147480/demo-app:sha-<commit>
         │  kustomize edit set image + git commit/push（只改 Git）
         ▼
 ④ GitOps 仓库 my-argocd: demo/gitops/overlays/dev
         │
         ▼
-   lab ArgoCD 轮询到新 commit → 同步 demo-dev → kubelet 从 Nexus 拉镜像
+   lab ArgoCD 轮询到新 commit → 同步 demo-dev → kubelet 从 ghcr.io 拉镜像
 ```
 
 这条链路的验收标准只有一句话：**`curl /version.txt` 返回的 `sha-xxxxxxx`
@@ -54,7 +54,7 @@
 | --- | --- | --- | --- |
 | 集群 | `kubectl get nodes` | 3 台 Ready | `lab/README.md` 阶段 0–1 |
 | ingress-nginx | `kubectl -n ingress-nginx get svc` | EXTERNAL-IP `192.168.1.200` | 阶段 3 |
-| Nexus docker-hosted | `curl -s -o /dev/null -w '%{http_code}' http://192.168.1.117:5001/v2/` | `200` 或 `401` | `docs/k8s-gitops-lab.md` 阶段 7 |
+| 镜像仓库 | 默认 ghcr.io，无需安装 | 包设为 public，否则 ImagePullBackOff | 只有用私有仓库时才需要 Nexus |
 | ARC runner | GitHub 组织 → Settings → Actions → Runners | 有 `arc-runner-lab` 在线 | 2.2 / 2.3 |
 | ArgoCD | `kubectl -n argocd get pods` | 全部 Running | 第 3 节 |
 
@@ -73,7 +73,7 @@
    ```
 
 2. `values.yaml` 里 runner 镜像指向 `cr.miguocomics.co/actions-runner:2.338.0`。
-   lab 如果拉不到，需要先把它 retag 推到 lab Nexus，再改 `values.yaml` 的 image。
+   lab 如果拉不到，需要先把它 retag 推到集群能访问的仓库，再改 `values.yaml` 的 image。
 
 确认 runner 真的能接活：在应用仓库里跑一次只含 `echo` 的 workflow，
 `runs-on: arc-runner-lab` 能变绿再继续。
@@ -139,7 +139,7 @@ helm install arc-runner-lab \
 
 前提是 lab 能拉到 `values.yaml` 里的两个镜像
 （`cr.miguocomics.co/actions-runner:2.338.0`、`mirrors.miguocomics.co/docker/library/docker:29.9.1-dind`）。
-拉不到就先在生产侧 retag 推到 lab Nexus，再改 `values.yaml` 的 image 字段。
+拉不到就先在生产侧 retag 推到集群能访问的仓库，再改 `values.yaml` 的 image 字段。
 
 ## 3. 在 lab 安装 ArgoCD
 
@@ -215,32 +215,41 @@ spec:
 EOF
 ```
 
-## 4. 让集群能拉 lab Nexus 的镜像
+## 4. 镜像仓库：默认用 ghcr.io（不需要 Nexus）
 
-lab Nexus 的 docker connector 是 **HTTP**（`192.168.1.117:5001`），
-而集群默认只走 HTTPS。少了这一步的典型表现是：**CI 推得上去，Pod 一直 `ImagePullBackOff`**。
+lab 里没有 Nexus，这套默认推到 **GitHub Container Registry**：
 
-三台节点都写 `/etc/rancher/rke2/registries.yaml`：
-
-```yaml
-mirrors:
-  "192.168.1.117:5001":
-    endpoint:
-      - "http://192.168.1.117:5001"
+```
+ghcr.io/wxl594147480/demo-app:sha-<commit>
 ```
 
-然后三台分别 `sudo systemctl restart rke2-server`，等节点回到 Ready。
+不用装任何东西，workflow 用 `GITHUB_TOKEN` 登录（`packages: write` 已在权限里）。
 
-runner 侧（dind）也要允许 HTTP 仓库，否则 `docker push` 会报
-`http: server gave HTTP response to HTTPS client`。在 runner 的 dind 参数里加一项：
+### 唯一要手动做的一步：把 package 设成 public
 
-```yaml
-# actions-runner/runner-set/values.yaml → template.spec.initContainers[dind].args
-- --insecure-registry=192.168.1.117:5001
-```
+ghcr 的 package 默认是私有的，kubelet 匿名拉不到，会 `ImagePullBackOff`（Events 里是 `unauthorized`）。
+第一次 push 成功后：
 
-> 如果你改用生产的 `cr.miguocomics.co`（HTTPS、已开匿名拉取），
-> 第 4 节整节可以跳过，并把 `DEMO_REGISTRY` 设为 `cr.miguocomics.co`。
+1. GitHub 个人主页 → **Packages** → `demo-app`
+2. 右下 **Package settings** → Danger Zone → **Change visibility** → Public
+
+> 不想公开也行：建一个带 `read:packages` 的 PAT，在 `demo-dev` 里建 `docker-registry` Secret，
+> 再给 Deployment 加 `imagePullSecrets`。lab 图省事，直接 public。
+
+### 换回私有仓库（以后装了 Nexus / 用生产 registry）
+
+改两个仓库变量即可，workflow 会自动走 secrets 登录分支：
+
+| 变量 | 值 |
+| --- | --- |
+| `DEMO_REGISTRY` | `192.168.1.117:5001` 或 `cr.miguocomics.co` |
+| `DEMO_IMAGE_NAME` | `demo-app` |
+
+同时把 `demo/gitops/overlays/dev/kustomization.yaml` 的 `newName` 改成同样的仓库地址。
+如果仓库是 **HTTP**（lab Nexus），还要：
+
+- 三台节点写 `/etc/rancher/rke2/registries.yaml` 的 `mirrors` + HTTP endpoint，重启 `rke2-server`；
+- 给 dind 加 `--insecure-registry=192.168.1.117:5001`（[values.yaml](gitops/runner/runner-set/values.yaml) 里留了注释）。
 
 ## 5. 给 ArgoCD 配 GitOps 仓库凭据（公开仓库可跳过）
 
@@ -274,18 +283,20 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
    ```bash
    kustomize build demo/gitops/overlays/dev | grep image:
-   # 初始应渲染出 192.168.1.117:5001/demo-app:sha-0000000
+   # 初始应渲染出 ghcr.io/wxl594147480/demo-app:sha-0000000
    ```
 
 4. 配置 Secrets / Variables：
 
 | 名称 | 类型 | 值 |
 | --- | --- | --- |
-| `REGISTRY_USERNAME` | Secret | Nexus 的 CI 用户（如 `ci`） |
-| `REGISTRY_PASSWORD` | Secret | 上面对应密码 |
 | `GITOPS_TOKEN` | Secret | PAT，对 `my-argocd` 有 **Contents: Read and write** |
-| `DEMO_REGISTRY` | Variable | `192.168.1.117:5001`（可不配，workflow 有默认值） |
+| `REGISTRY_USERNAME` | Secret | 仅私有仓库需要（Nexus 的 CI 用户） |
+| `REGISTRY_PASSWORD` | Secret | 仅私有仓库需要 |
 | `RUNNER_LABEL` | Variable | `arc-runner-lab`（用生产 runner 时改成 `arc-runner-set`） |
+
+> ghcr.io 走 `GITHUB_TOKEN`，不需要 `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`。
+> 换私有仓库时再加这两个 Secret，并设置 `DEMO_REGISTRY` / `DEMO_IMAGE_NAME` 变量（见第 4 节）。
 
 > `GITOPS_TOKEN` 用 classic PAT 时勾 `repo`；用 fine-grained 时选
 > `wxl594147480/my-argocd` + Contents 读写。若 main 开了分支保护，要把该用户/App 加进 bypass 名单，
@@ -310,7 +321,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
   ArgoCD 靠“Git 里的期望镜像”和“集群里实际镜像”做 diff，可变 tag 会让 diff 失去意义，
   也没法精确回滚到某一次构建。
 - **PR 只构建不推送**：`smoke test` 和 `push` 两个 step 都用
-  `if: github.event_name != 'pull_request'` 挡住，PR 不会污染 Nexus，也不会改 Git；
+  `if: github.event_name != 'pull_request'` 挡住，PR 不会污染镜像仓库，也不会改 Git；
   但 `test` job 在 PR 上照常跑，这是它存在的意义。
 - **promote 不做 `kubectl set image`。**
   集群开了 `selfHeal`，手工改会被立刻拉回；而且那样集群状态就和 Git 漂移了。
@@ -334,7 +345,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
 1. 删掉（或禁用）`promote` job；
 2. 在 lab 装 `infrastructure/argocd-image-updater`；
-3. 给 `demo-dev` 建一个 `ImageUpdater` CR（`imageName: 192.168.1.117:5001/demo-app`，
+3. 给 `demo-dev` 建一个 `ImageUpdater` CR（`imageName: ghcr.io/wxl594147480/demo-app`，
    策略 `newest-build`，`writeBackTarget: kustomization:demo/gitops/overlays/dev`）。
 
 ### 7.4 测试依赖：service containers，不是集群中间件
@@ -366,7 +377,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
 1. **dind 直连 Docker Hub**。lab 节点上配的镜像站只对 containerd 生效，dind 不继承。
    拉不到时给 dind 加 `--registry-mirror`（`demo/gitops/runner/runner-set/values.yaml` 里有注释），
-   或把三个镜像同步到 Nexus 后改 `image:`。
+   或把三个镜像同步到可访问的仓库后改 `image:`。
 2. **健康检查必须写**。`services:` 只保证容器“started”，不保证“ready”；
    没有 `--health-cmd` 时测试经常在 Postgres 初始化到一半时就开始连，表现为随机失败。
    `scripts/test-deps.sh` 还会再做一次 TCP 探测兜底。
@@ -381,7 +392,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 1. 装 ArgoCD（第 3 节）；仓库是公开的，第 5 节可跳过。
 2. 装 ARC（2.2），确认 GitHub Runners 页面里 `arc-runner-lab` 是 Idle。
 3. push 应用仓库 → Actions 里 `meta → test → build → promote` 依次变绿。
-4. 确认镜像：Nexus → Browse → `docker-hosted` → `demo-app`，应出现 `sha-xxxxxxx`。
+4. 确认镜像：GitHub 个人主页 → **Packages** → `demo-app`，应出现 `sha-xxxxxxx` 的 tag。
 5. 确认回写：在 `my-argocd` 的本地克隆里 `git log --oneline -3`，应有一条
    `chore(demo): 镜像升级到 sha-xxxxxxx`。
 6. `kubectl apply -f demo/gitops/argocd-app.yaml`。
@@ -426,13 +437,15 @@ kubectl -n demo-dev scale deploy/demo-app --replicas=3
 
 | 现象 | 最可能原因 | 排查 |
 | --- | --- | --- |
-| workflow 一直 queued | runner label 不匹配 / ARC 离线 / 与生产抢队列 | GitHub 组织 Runners 页面；`kubectl -n arc-runners get pods`；确认 `RUNNER_LABEL=arc-runner-lab` |
-| test job 卡在 `Initialize containers` | dind 拉不到 `postgres` / `valkey` / `rabbitmq` 镜像 | 看 job 日志里的 pull 错误；给 dind 加 `--registry-mirror` 或换 Nexus 地址 |
+| workflow 一直 queued | runner label 不匹配 / ARC 离线 / 与生产抢队列 | 仓库 Settings → Actions → Runners；`kubectl -n arc-runners get pods`；确认 `RUNNER_LABEL=arc-runner-lab` |
+| test job 卡在 `Initialize containers` | dind 拉不到 `postgres` / `valkey` / `rabbitmq` 镜像 | 看 job 日志里的 pull 错误；给 dind 加 `--registry-mirror` 或换可用的镜像源 |
 | test 随机失败、连不上库 | 没写 health check，测试跑在依赖就绪前 | 确认 `services.*.options` 里有 `--health-cmd`；保留 `test-deps.sh` |
 | `services` 端口连不上 | job 没走 dind / 端口没映射 | 确认 runner 模板里 dind 正常、`ports:` 有写；`docker ps` 看容器 |
-| `docker login` 401 | Nexus 用户没 `docker-hosted` 权限 | Nexus → Security → Roles，确认 `nx-repository-view-docker-docker-hosted-*` |
-| push 报 HTTPS 到 HTTP | dind 没加 `--insecure-registry` | 第 4 节 |
-| build 拉 `nginx` 失败 | dind 直连 Docker Hub，未走节点镜像站 | 给 dind 加 `--registry-mirror`，或把基础镜像换成 Nexus 里已有的 |
+| `docker login` 401 | 私有仓库用户名/密码错，或没权限 | 只在用私有仓库时出现；检查 Secret 和 Nexus 角色 |
+| push 报 `unauthorized`（ghcr） | workflow 缺 `packages: write` 或仓库设置禁用了 Actions | 看 7.x 的 `permissions`；仓库 Settings → Actions → General |
+| `ImagePullBackOff` + `unauthorized`（ghcr） | package 还是 private，kubelet 匿名拉不到 | Packages → demo-app → Package settings → Change visibility → Public |
+| `ImagePullBackOff` + `not found` | overlay 的 `newName` 和实际镜像不一致 | `kubectl -n demo-dev describe pod`，对照 workflow 的 `images:` 输出 |
+| build 拉 `nginx` 失败 | dind 直连 Docker Hub，未走节点镜像站 | 给 dind 加 `--registry-mirror`，或把基础镜像换成可用的镜像 |
 | promote 403 | `GITOPS_TOKEN` 无写权限 / 分支保护 | 用该 token 手工 `git push` 复现 |
 | ArgoCD 报 `ComparisonError` | 仓库凭据 url 不匹配、path 写错 | `kubectl -n argocd logs deploy/argocd-repo-server` |
 | ArgoCD 报 `repository not found` / 拉取超时 | lab 到 `github.com` 不通（110 的 GitHub 路由没起）或 PAT 无权读 | 在节点上 `curl -sI https://github.com`；对照 `lab/VPN.md` |
@@ -455,7 +468,7 @@ kubectl -n demo-dev scale deploy/demo-app --replicas=3
 
 | 项 | 生产 | 本 demo |
 | --- | --- | --- |
-| 镜像仓库 | `cr.miguocomics.co`（HTTPS，匿名拉取） | lab Nexus `192.168.1.117:5001`（HTTP） |
+| 镜像仓库 | `cr.miguocomics.co`（HTTPS，匿名拉取） | ghcr.io（默认，package 需 public） |
 | GitOps 仓库 | `Mangania/argocd-web-services` | `wxl594147480/my-argocd` 的 `demo/` 目录 |
 | tag 回写 | UAT 由 Image Updater 自动，生产人工 | CI 直接改 `newTag` |
 | ArgoCD 暴露 | Ingress + `gts-prod` 证书 | 无 TLS，`argocd.lab` 或 port-forward |
