@@ -14,7 +14,7 @@ resources:
 images:
   - name: demo-app
     newName: ghcr.io/wxl594147480/demo-app
-    newTag: sha-0000000
+    newTag: sha-9052b5d
 
 replicas:
   - name: demo-app
