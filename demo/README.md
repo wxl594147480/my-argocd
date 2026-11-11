@@ -310,7 +310,7 @@ PAT 只需要 **读** 权限（classic：`repo`；fine-grained：Contents = Read
 
 | job | 做什么 | 为什么单独拆 |
 | --- | --- | --- |
-| `meta` | 用 `docker/metadata-action` 算出 tag（`sha-<7位>`，打 `v*` 时再加一个语义化 tag） | tag 规则只写一处，build 和 promote 引用同一份输出，不会出现“推的 tag 和写的 tag 不一致” |
+| `meta` | 用 shell 算出 tag（`sha-<7位>`，打 `v*` 时再加一个语义化 tag） | 不依赖 `docker/metadata-action`：lab 下载外部 action 经常 100s 超时 |
 | `test` | 用 `services:` 起 PostgreSQL / Valkey / RabbitMQ → 等健康 → 跑测试 | 测试依赖随 job 生灭，不占集群 PVC，也不需要在集群里长期维护中间件 |
 | `build` | `docker build`（多 tag）→ 把 tag 写进 `version.txt` → 起容器自检 → 推送 | 推送前就验证镜像可运行，坏镜像不进仓库 |
 | `promote` | checkout GitOps 仓库 → 改 overlay 的 `newTag` → commit + push | 只在 main / `v*` 上跑；PR 完全不写 Git |

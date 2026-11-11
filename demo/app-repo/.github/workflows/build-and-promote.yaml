@@ -46,17 +46,25 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - name: Docker metadata
+      # 不用 docker/metadata-action：lab 到 codeload.github.com 只有 ~0.5MB/s，
+      # 下载外部 action 经常 100s 超时（实测 meta job 就失败在这里）。
+      - name: Compute tags
         id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # 每次提交一个不可变标签：sha-<7 位>；打 v* tag 时再额外推一个语义化版本。
-          tags: |
-            type=sha,prefix=sha-,format=short
-            type=ref,event=tag
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="sha-${GITHUB_SHA::7}"
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:${VERSION}"
+            if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              echo "${IMAGE}:${GITHUB_REF_NAME}"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "resolved version=${VERSION}"
+          echo "resolved image=${IMAGE}"
 
   # 2) 测试：在 runner 内部用 service containers 起 PostgreSQL / Valkey / RabbitMQ，
   #    跑完随 job 一起销毁。地址统一注入成 127.0.0.1，测试代码不需要感知 CI。
@@ -135,21 +143,19 @@ jobs:
         # 把 tag 写进镜像，部署后可以反查镜像内容是否与 tag 一致。
         run: echo "${{ needs.meta.outputs.version }}" > version.txt
 
-      - name: Log in to ghcr.io
-        if: env.REGISTRY == 'ghcr.io'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to private registry
-        if: env.REGISTRY != 'ghcr.io'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+      # 同样不用 docker/login-action，直接 docker login，少下载一个 action。
+      - name: Log in to registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "${REGISTRY}" = "ghcr.io" ]; then
+            printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          else
+            printf '%s' "${REGISTRY_PASSWORD}" | docker login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+          fi
 
       # 这里刻意用普通 docker build/push，而不是 buildx + registry cache：
       # lab 的 dind 拉不到 moby/buildkit 镜像时，setup-buildx 会直接卡住。
