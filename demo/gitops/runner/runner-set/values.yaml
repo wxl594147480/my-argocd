@@ -9,7 +9,7 @@
 # 这里用仓库级：URL 必须是**跑 workflow 的那个仓库**。
 # 建好应用仓库后按实际名字改，例如 https://github.com/wxl594147480/demo-app
 # （想服务多个仓库就新建一个免费 organization，把 URL 换成 org 地址。）
-githubConfigUrl: https://github.com/wxl594147480/demo-app
+githubConfigUrl: https://github.com/wxl594147480/MiGuo-Studio
 githubConfigSecret: github-app-secret
 runnerScaleSetName: arc-runner-lab
 
@@ -55,9 +55,9 @@ template:
           - --host=unix:///var/run/docker.sock
           - --group=$(DOCKER_GROUP_GID)
           - --mtu=1400
-          # 默认推 ghcr.io（HTTPS），不需要 insecure-registry。
-          # 如果改用 HTTP 的私有仓库（例如 lab Nexus 192.168.1.117:5001），再加回来：
-          # - --insecure-registry=192.168.1.117:5001
+          # lab Nexus 是 HTTP 仓库，dind 必须显式放行，
+          # 否则 docker push 报 "server gave HTTP response to HTTPS client"
+          - --insecure-registry=192.168.1.210:5001
           # test job 的 service 容器（postgres/valkey/rabbitmq）从 Docker Hub 拉，
           # lab 直连 docker.io 不稳，必须走镜像站。
           - --registry-mirror=https://docker.m.daocloud.io
