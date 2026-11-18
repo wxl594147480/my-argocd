@@ -30,6 +30,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: miguo-studio-config
+            # 敏感项：DB_CONNECTION_STRING / REDIS_URL（手工创建，不入 Git）
+            - secretRef:
+                name: miguo-studio-secret
+                optional: true
           # 镜像里 nginx 监听 3000，根目录 /app/client；/version.txt 是构建时写进去的 tag。
           readinessProbe:
             httpGet:

@@ -5,3 +5,5 @@ resources:
   - deployment.yaml
   - service.yaml
   - configmap.yaml
+  - postgres.yaml
+  - valkey.yaml

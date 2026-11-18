@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: miguo-dbupdate
+  labels:
+    app: miguo-studio
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: dbupdate
+          image: 192.168.1.210:5001/miguo-studio:sha-ed7134b
+          command:
+            - sh
+            - -c
+            - cd /app/server && exec dotnet Miguo.Factory.dll --dbupdate
+          envFrom:
+            - configMapRef:
+                name: miguo-studio-config
+            - secretRef:
+                name: miguo-studio-secret
