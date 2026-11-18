@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: miguo-studio-config
+  labels:
+    app: miguo-studio
+data:
+  # 只放「不给也能启动」的非敏感项。缺失的项 GlobalEnv 一律回落到空字符串，
+  # 所以 Pod 能起来，但 /api/* 会因为没有 DB/REDIS/MQ 而 500 —— 这是预期状态，
+  # 链路验收只看镜像 tag 与静态页（/version.txt）。
+  APP_ENV: production
+  ASPNETCORE_ENVIRONMENT: Production
+  ENABLE_JOBS: "false"
+  LOG_LEVEL: info
+  PAYMENT_ENABLED: "false"
+  INFERENCE_PRIORITY_ENABLED: "false"
+  IS_FULLY_OPEN: "false"

@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: miguo-studio
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+# CI 的 promote job 只改这一段：newTag 换成 sha-<commit 前 7 位>。
+# newName 必须与 workflow 里算出的镜像名完全一致，否则 ArgoCD 会去拉别的仓库。
+images:
+  - name: miguo-studio
+    newName: 192.168.1.210:5001/miguo-studio
+    newTag: sha-eb144a6
+
+replicas:
+  - name: miguo-studio
+    count: 1

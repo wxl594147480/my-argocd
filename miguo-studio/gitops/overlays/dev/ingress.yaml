@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: miguo-studio
+  labels:
+    app: miguo-studio
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: miguo.lab
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: miguo-studio
+                port:
+                  number: 3000

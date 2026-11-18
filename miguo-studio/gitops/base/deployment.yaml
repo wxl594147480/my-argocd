@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: miguo-studio
+  labels:
+    app: miguo-studio
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: miguo-studio
+  template:
+    metadata:
+      labels:
+        app: miguo-studio
+    spec:
+      # Nexus 开了匿名 pull 就不需要 imagePullSecrets；没开的话在 miguo-studio
+      # namespace 里建好 nexus-docker 再取消注释。
+      # imagePullSecrets:
+      #   - name: nexus-docker
+      containers:
+        - name: miguo-studio
+          # 这里的值不会被部署：overlay 的 images.newName / newTag 会覆盖它。
+          image: miguo-studio:bootstrap
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: miguo-studio-config
+          # 镜像里 nginx 监听 3000，根目录 /app/client；/version.txt 是构建时写进去的 tag。
+          readinessProbe:
+            httpGet:
+              path: /version.txt
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /version.txt
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: miguo-studio-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # GitOps 仓库是公开仓库，ArgoCD 可匿名 clone，不需要仓库凭据。
+    # 换成私有仓库时，在 argocd namespace 建 type=git 的 repository secret。
+    repoURL: https://github.com/wxl594147480/my-argocd.git
+    targetRevision: main
+    path: miguo-studio/gitops/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: miguo-studio
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
